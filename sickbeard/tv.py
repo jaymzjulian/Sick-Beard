@@ -235,7 +235,10 @@ class TVShow(object):
             curSeason = int(curResult["season"])
             curEpisode = int(curResult["episode"])
             if curSeason not in cachedSeasons:
-                cachedSeasons[curSeason] = cachedShow[curSeason]
+                if curSeason in cachedShow:
+                    cachedSeasons[curSeason] = cachedShow[curSeason]
+                else: 
+                    cachedSeasons[curSeason] = None
 
             if not curSeason in scannedEps:
                 scannedEps[curSeason] = {}
