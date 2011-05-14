@@ -281,13 +281,20 @@ class TVShow(object):
         except exceptions.TVRageException, e:
             logger.log(u"Failed to initialise TVRage object"+ex(e), logger.ERROR)
             return
+        show_info=tvr._getTVRageInfo(0,0)
+        if show_info.has_key('Latest Episode'):
+            numSeasons=int(show_info['Latest Episode'].split('^')[0].split("x")[0])
+        else:
+            # fake data for broken shows....
+            numSeasons=10
         # start at ep 1 season 1, iterate
         # FIXME: this is terribe
         season=1
         scannedEps = {}
-        # loop until we hit a season with no new episodes
-        episode=2
-        while episode>1:
+        logger.log(u"Attempting to get "+str(numSeasons)+" seasons from TVRage", logger.ERROR)
+    
+        # loop through all aired seasons, +1 just in case    
+        for season in range(numSeasons+2):
             episode=1
             scannedEps[season]={}
             validEpisode=True
@@ -308,8 +315,8 @@ class TVShow(object):
                     #with ep.lock:
                     #    logger.log(u"FIXME: put data into episode", logger.ERROR)
                     episode+=1
-            season+=1
         logger.log(u"FIXME: write TVRage grabber", logger.ERROR)
+        return scannedEps
 
     def loadEpisodesFromTVDB(self, cache=True):
 
