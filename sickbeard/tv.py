@@ -20,6 +20,7 @@ from __future__ import with_statement
 
 import os.path
 import datetime
+import time
 import threading
 import re
 import glob
@@ -252,6 +253,60 @@ class TVShow(object):
 
         return scannedEps
 
+    def loadEpisodesFromInternet(self, cache=True):
+        # FIXME: pick one or the other based on config.  For
+        # now, this is a hack that assumes that TVRage is better than
+        # TVDB.  Which is totes true!
+
+        # if we don't yet have a TVRage ID, try and get one
+        # now
+        if self.tvrid == 0:
+            self.setTVRID()
+
+        # How about now?  If we've got one, lets do something with it
+        if self.tvrid != 0:
+            logger.log(u"TVRageID: "+str(self.tvrid), logger.ERROR)
+            return self.loadEpisodesFromTVRage(cache)
+        else:
+            logger.log(u"Failed to obtain TVRage ID.  Sad Tiems!  Falling back to TVDB"+str(self.tvrid), logger.ERROR)
+            return self.loadEpisodesFromTVDB(cache)
+
+    def loadEpisodesFromTVRage(self, cache=True):
+        # get our object first. 
+        try:
+            tvr = tvrage.TVRage(self)
+        except exceptions.TVRageException, e:
+            logger.log(u"Failed to initialise TVRage object"+ex(e), logger.ERROR)
+            return
+        # start at ep 1 season 1, iterate
+        # FIXME: this is terribe
+        season=1
+        scannedEps = {}
+        # loop until we hit a season with no new episodes
+        episode=2
+        while episode>1:
+            episode=1
+            scannedEps[season]={}
+            validEpisode=True
+            while validEpisode:
+                try:    
+                    logger.log(u"Attempting to get episode from TVRage: "+str(season)+"x"+str(episode), logger.ERROR)
+                    # FIXME: this is a dumb way to do this :)
+                    ep = self.getEpisode(season, episode)
+                except exceptions.EpisodeNotFoundException, e:
+                    logger.log(u"Failed to get episode: "+ex(e), logger.ERROR)
+                    validEpisode=False
+                if validEpisode:
+                    # FIXME: actually get info :)
+                    #ep_info=tvr._getTVRageInfo(season, episode)
+                    #print ep_info.keys()
+                    #ep = self.getEpisode(season, episode)
+                    scannedEps[season][episode] = True
+                    #with ep.lock:
+                    #    logger.log(u"FIXME: put data into episode", logger.ERROR)
+                    episode+=1
+            season+=1
+        logger.log(u"FIXME: write TVRage grabber", logger.ERROR)
 
     def loadEpisodesFromTVDB(self, cache=True):
 
@@ -334,7 +389,6 @@ class TVShow(object):
         return poster_result or fanart_result or season_thumb_result
 
     def loadLatestFromTVRage(self):
-
         try:
             # load the tvrage object
             tvr = tvrage.TVRage(self)
@@ -1002,10 +1056,15 @@ class TVEpisode(object):
 
         # if we tried loading it from NFO and didn't find the NFO, use TVDB
         if self.hasnfo == False:
+            # FIXME: make this switch order based on the preferred source
+            result = False
             try:
                 result = self.loadFromTVDB(season, episode)
             except exceptions.EpisodeDeletedException:
-                result = False
+                pass
+
+            # If we can't use TVDB, try TVRage
+            result = self.loadFromTVRage(season, episode)
 
             # if we failed TVDB, NFO *and* SQL then fail
             if result == False and not sqlResult:
@@ -1050,6 +1109,91 @@ class TVEpisode(object):
             self.dirty = False
             return True
 
+    def loadFromTVRage(self, season=None, episode=None, cache=True, tvapi=None, cachedSeason=None):
+        # Only do this if we have a TVRage ID
+        if self.show.tvrid == 0:
+            return False
+
+        try:
+            tvr = tvrage.TVRage(self.show)
+        except exceptions.TVRageException, e:
+            logger.log(u"Failed to initialise TVRage object"+ex(e), logger.ERROR)
+            return False
+        
+        # set defaults
+        if season == None:
+            season = self.season
+        if episode == None:
+            episode = self.episode
+
+        # do the grabbing
+        logger.log("Grabbing from TVRage "+str(self.show.tvrid))
+        try:
+            ep_info=tvr._getTVRageInfo(season, episode)
+        except exceptions.TVRageException, e:
+            logger.log("No TVRage data for episode "+str(season)+"x"+str(episode))
+            return False
+
+        with self.lock:
+            logger.log(u"FIXME: put data into episode", logger.ERROR)
+
+        self.season=season
+        self.episode=episode
+
+        if ep_info.has_key('Episode Info'):
+            logger.log(str(ep_info['Episode Info']))
+            splitInfo=ep_info['Episode Info'].split("^")
+            self.name=splitInfo[1]
+            # the two datetimes here are right - python is weird.
+            try:
+                self.airdate=datetime.datetime.strptime(splitInfo[2],"%d/%b/%Y").date()
+            except ValueError:
+                logger.log(u"Malformed air date retrieved from TVRage ("+self.show.name+" - "+str(season)+"x"+str(episode)+")", logger.ERROR)
+        else:
+            return False
+        self.setInitialEpisodeStatus()
+        return True
+
+    def setInitialEpisodeStatus(self):
+        if not ek.ek(os.path.isfile, self.location):
+            # if we don't have the file
+            if self.airdate >= datetime.date.today() and self.status not in Quality.SNATCHED + Quality.SNATCHED_PROPER:
+                # and it hasn't aired yet set the status to UNAIRED
+                logger.log(u"Episode airs in the future, changing status from " + str(self.status) + " to " + str(UNAIRED), logger.DEBUG)
+                self.status = UNAIRED
+            # if there's no airdate then set it to skipped (and respect ignored)
+            elif self.airdate == datetime.date.fromordinal(1):
+                if self.status == IGNORED:
+                    logger.log(u"Episode has no air date, but it's already marked as ignored", logger.DEBUG)
+                else:
+                    logger.log(u"Episode has no air date, automatically marking it skipped", logger.DEBUG)
+                    self.status = SKIPPED
+            # if we don't have the file and the airdate is in the past
+            else:
+                if self.status == UNAIRED:
+                    self.status = WANTED
+
+                # if we somehow are still UNKNOWN then just skip it
+                elif self.status == UNKNOWN:
+                    self.status = SKIPPED
+
+                else:
+                    logger.log(u"Not touching status because we have no ep file, the airdate is in the past, and the status is "+str(self.status), logger.DEBUG)
+
+        # if we have a media file then it's downloaded
+        elif sickbeard.helpers.isMediaFile(self.location):
+            # leave propers alone, you have to either post-process them or manually change them back
+            if self.status not in Quality.SNATCHED_PROPER + Quality.DOWNLOADED + Quality.SNATCHED + [ARCHIVED]:
+                logger.log(u"5 Status changes from " + str(self.status) + " to " + str(Quality.statusFromName(self.location)), logger.DEBUG)
+                self.status = Quality.statusFromName(self.location)
+
+        # shouldn't get here probably
+        else:
+            logger.log(u"6 Status changes from " + str(self.status) + " to " + str(UNKNOWN), logger.DEBUG)
+            self.status = UNKNOWN
+
+
+        # hasnfo, hastbn, status?
 
     def loadFromTVDB(self, season=None, episode=None, cache=True, tvapi=None, cachedSeason=None):
 
@@ -1137,46 +1281,7 @@ class TVEpisode(object):
 
         logger.log(str(self.show.tvdbid) + ": Setting status for " + str(season) + "x" + str(episode) + " based on status " + str(self.status) + " and existence of " + self.location, logger.DEBUG)
 
-        if not ek.ek(os.path.isfile, self.location):
-
-            # if we don't have the file
-            if self.airdate >= datetime.date.today() and self.status not in Quality.SNATCHED + Quality.SNATCHED_PROPER:
-                # and it hasn't aired yet set the status to UNAIRED
-                logger.log(u"Episode airs in the future, changing status from " + str(self.status) + " to " + str(UNAIRED), logger.DEBUG)
-                self.status = UNAIRED
-            # if there's no airdate then set it to skipped (and respect ignored)
-            elif self.airdate == datetime.date.fromordinal(1):
-                if self.status == IGNORED:
-                    logger.log(u"Episode has no air date, but it's already marked as ignored", logger.DEBUG)
-                else:
-                    logger.log(u"Episode has no air date, automatically marking it skipped", logger.DEBUG)
-                    self.status = SKIPPED
-            # if we don't have the file and the airdate is in the past
-            else:
-                if self.status == UNAIRED:
-                    self.status = WANTED
-
-                # if we somehow are still UNKNOWN then just skip it
-                elif self.status == UNKNOWN:
-                    self.status = SKIPPED
-
-                else:
-                    logger.log(u"Not touching status because we have no ep file, the airdate is in the past, and the status is "+str(self.status), logger.DEBUG)
-
-        # if we have a media file then it's downloaded
-        elif sickbeard.helpers.isMediaFile(self.location):
-            # leave propers alone, you have to either post-process them or manually change them back
-            if self.status not in Quality.SNATCHED_PROPER + Quality.DOWNLOADED + Quality.SNATCHED + [ARCHIVED]:
-                logger.log(u"5 Status changes from " + str(self.status) + " to " + str(Quality.statusFromName(self.location)), logger.DEBUG)
-                self.status = Quality.statusFromName(self.location)
-
-        # shouldn't get here probably
-        else:
-            logger.log(u"6 Status changes from " + str(self.status) + " to " + str(UNKNOWN), logger.DEBUG)
-            self.status = UNKNOWN
-
-
-        # hasnfo, hastbn, status?
+        self.setInitialEpisodeStatus()
 
 
     def loadFromNFO(self, location):

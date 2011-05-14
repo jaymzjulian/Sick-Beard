@@ -280,7 +280,7 @@ class QueueItemAdd(ShowQueueItem):
             logger.log(traceback.format_exc(), logger.DEBUG)
 
         try:
-            self.show.loadEpisodesFromTVDB()
+            self.show.loadEpisodesFromInternet()
             self.show.setTVRID()
 
             self.show.writeMetadata()
@@ -376,7 +376,7 @@ class QueueItemUpdate(ShowQueueItem):
         # get episode list from TVDB
         logger.log(u"Loading all episodes from theTVDB", logger.DEBUG)
         try:
-            TVDBEpList = self.show.loadEpisodesFromTVDB(cache=not self.force)
+            TVDBEpList = self.show.loadEpisodesFromInternet(cache=not self.force)
         except tvdb_exceptions.tvdb_exception, e:
             logger.log(u"Unable to get info from TVDB, the show info will not be refreshed: "+ex(e), logger.ERROR)
             TVDBEpList = None
