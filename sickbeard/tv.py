@@ -287,7 +287,7 @@ class TVShow(object):
         else:
             # fake data for broken shows....
             numSeasons=10
-        # start at ep 1 season 1, iterate
+        # start at ep 1 season 1, then iterate until the final season according to latest episode
         # FIXME: this is terribe
         season=1
         scannedEps = {}
